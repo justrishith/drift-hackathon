@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+venv311/
+config.user.json
+.threadline-state.json
+AUTO_MEMORY.md

@@ -7,6 +7,13 @@ class Actuator:
     def _real(self) -> bool:
         return not self.cfg.get("dry_run", True)
 
+    def active_window(self):
+        """Return the current foreground HWND, or a harmless dry-run placeholder."""
+        if self._real():
+            import win32gui
+            return win32gui.GetForegroundWindow()
+        return 0
+
     def move_cursor(self, x: int, y: int) -> None:
         self.log.append(("cursor", x, y))
         if self._real():
@@ -17,6 +24,8 @@ class Actuator:
         self.log.append(("grab", hwnd, cx, cy))
         if self._real():
             import win32gui
+            if not hwnd:
+                hwnd = win32gui.GetForegroundWindow()
             rect = win32gui.GetWindowRect(hwnd)
             self._grab = {"hwnd": hwnd, "dx": cx - rect[0], "dy": cy - rect[1]}
         else:

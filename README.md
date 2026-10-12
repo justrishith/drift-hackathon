@@ -20,19 +20,25 @@ The AI runs entirely offline: MediaPipe Tasks `hand_landmarker` (21 landmarks) c
 - **Libraries**: `opencv-python`, `mediapipe`, `numpy`, `pywin32` (OS calls behind `dry_run` flag)
 - **Architecture**: `camera → tracker → gestures → actuator` — pure-function state machine, no training data, zero cloud
 
-## Hackathon Demo (this repo)
+## Hackathon Product Loop (this repo)
 
-The `demo.py` script showcases the core AI pipeline:
+The `demo.py` script runs the actual Drift product loop in safe dry-run mode:
 
 1. **Webcam** → MediaPipe hand landmarker → 21 landmarks
-2. **Gesture classification**: `is_pinch`, `is_fist`, `palm_velocity` (pure Python, no ML training)
-3. **Console state display** + **OpenCV window** with live landmark drawing
-4. **Dry-run mode**: all OS calls (`SetWindowPos`, `SetCursorPos`) gated behind `dry_run=True` — safe on any laptop
+2. **Gesture classification**: open palm, push/hold, pinch, swipe, fist kill-switch
+3. **Animated OpenCV HUD**: Dynamic-Island-style status pill, neon hand trail, FPS, action feed
+4. **Actuator path**: dry-run logs by default; `--live` enables real Windows cursor/window/zoom actions
 
 Run the demo:
 
 ```bash
 py -3.11 demo.py
+```
+
+For real Windows actions after you trust the demo:
+
+```bash
+py -3.11 demo.py --live
 ```
 
 **Controls** (in the demo window):
@@ -46,8 +52,9 @@ py -3.11 demo.py
 
 ```
 drift/
-├── demo.py              # Hackathon demo — AI gesture classification display
+├── demo.py              # Hackathon entrypoint — runs the product loop
 ├── src/                 # Core modules (full SDD implementation)
+│   ├── app.py           # Real camera loop + animated HUD + action feed
 │   ├── util.py          # load_config / save_config
 │   ├── geometry.py      # ROI-to-desktop mapping (multi-monitor)
 │   ├── gestures.py      # is_pinch, is_fist, finger_extended, palm_velocity
@@ -71,7 +78,7 @@ py -3.11 -m venv venv
 # 2. Install dependencies
 pip install opencv-python mediapipe numpy pywin32
 
-# 3. Run the demo
+# 3. Run the safe product loop
 py -3.11 demo.py
 ```
 
@@ -93,7 +100,7 @@ Record a 3-minute screen+webcam video showing:
 2. Open-palm → state changes displayed on console/overlay
 3. Pinch spread → zoom out indication
 4. Fist held → `frozen` state
-5. Demo on a single-laptop display (no dual monitors needed for v1)
+5. Show the animated HUD/action feed on a single-laptop display (no dual monitors needed for v1)
 
 Upload to YouTube (unlisted or public) and include the link in your hackathon submission.
 

@@ -30,17 +30,19 @@ def _fist_lm():
 
 
 def test_classify_frame_guards_thresholds_and_zoom():
-    from src.gestures import classify_frame
+    from src.gestures import classify_frame, is_open_palm
     cfg = {"swipe_vel_px_s": 900, "pinch_grab_px": 40, "pinch_release_px": 55}
     # T3-2: incomplete / missing landmark keys must skip, never KeyError.
     assert classify_frame({"wrist": (0, 0)}, [(0, 0.0), (10, 1.0)], cfg, False) == []
     assert classify_frame(None, [], cfg, False) == []
     # Fist takes precedence even with a fast swipe history.
     assert classify_frame(_fist_lm(), [(0, 0.0), (1000, 0.5)], cfg, False) == ["fist"]
+    assert is_open_palm(_open_palm()) is True
     # Fast open-palm motion -> swipe_right; slow motion -> no swipe.
-    assert classify_frame(_open_palm(), [(0, 0.0), (1000, 0.5)], cfg, False) == ["swipe_right"]
-    assert classify_frame(_open_palm(), [(1000, 0.0), (0, 0.5)], cfg, False) == ["swipe_left"]
-    assert classify_frame(_open_palm(), [(0, 0.0), (10, 1.0)], cfg, False) == []
+    assert classify_frame(_open_palm(), [(0, 0.0), (1000, 0.5)], cfg, False) == ["palm_show", "swipe_right"]
+    assert classify_frame(_open_palm(), [(1000, 0.0), (0, 0.5)], cfg, False) == ["palm_show", "swipe_left"]
+    assert classify_frame(_open_palm(), [(0, 0.0), (10, 1.0)], cfg, False) == ["palm_show"]
+    assert classify_frame(_open_palm(), [(0, 0.0), (10, 1.0)], cfg, True) == ["push_hold"]
     # Tight pinch spread -> pinch_in (zoom out); held wider spread -> pinch_out (zoom in).
     assert classify_frame(_open_palm(pinch=True), [(0, 0.0), (1, 1.0)], cfg, False) == ["pinch_in"]
     lm_mid = _open_palm(pinch=True)
