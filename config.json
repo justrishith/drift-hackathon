@@ -1,0 +1,11 @@
+{
+  "dry_run": true,
+  "cooldown_s": 0.45,
+  "linger_drop_s": 0.4,
+  "fist_hold_s": 0.5,
+  "pinch_grab_px": 40,
+  "pinch_release_px": 55,
+  "swipe_vel_px_s": 900,
+  "roi_margin": 0.08,
+  "monitors": {"d1": [1920, 1080], "d2": [2560, 1440], "total_w": 4480, "total_h": 1440, "seam_x": 1920}
+}

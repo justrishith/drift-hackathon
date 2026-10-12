@@ -1,0 +1,67 @@
+import math
+def _dist(a, b) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+def finger_extended(wrist, pip, tip) -> bool:
+    return _dist(wrist, tip) > _dist(wrist, pip) * 1.12
+
+def is_pinch(lm: dict, grab_px: float, release_px: float, holding: bool) -> bool:
+    d = _dist(lm["thumb_tip"], lm["index_tip"])
+    return d < release_px if holding else d < grab_px
+
+def is_fist(lm: dict) -> bool:
+    w = lm["wrist"]
+    pairs = [("index_pip", "index_tip"), ("middle_pip", "middle_tip"),
+             ("ring_pip", "ring_tip"), ("pinky_pip", "pinky_tip")]
+    return all(not finger_extended(w, lm[p], lm[t]) for p, t in pairs)
+
+def palm_velocity(hist: list) -> float:
+    (x0, t0), (x1, t1) = hist[0], hist[-1]
+    dt = max(t1 - t0, 1e-6)
+    return abs(x1 - x0) / dt
+
+REQUIRED_KEYS = ("wrist", "thumb_tip", "index_tip", "index_pip",
+                 "middle_pip", "middle_tip", "ring_pip", "ring_tip",
+                 "pinky_pip", "pinky_tip")
+
+
+def classify_frame(lm, hist: list, cfg: dict, holding: bool) -> list:
+    """Map one frame's landmarks + palm history to state-machine events.
+
+    Pure helper (no camera/display imports). T3-2: incomplete landmark
+    dicts are skipped with a log line — never a KeyError into the loop.
+    Uses existing is_fist / is_pinch / palm_velocity; pinch spread picks
+    the zoom direction (tight -> pinch_in / zoom-out, wider-held spread
+    -> pinch_out / zoom-in). Emits a subset of
+    ["fist", "swipe_left", "swipe_right", "pinch_in", "pinch_out"].
+    Open-palm / push_hold detection (is_palm) is future work — absent here.
+    """
+    if not isinstance(lm, dict) or any(k not in lm for k in REQUIRED_KEYS):
+        print("drift: incomplete landmarks; skipping frame")
+        return []
+    try:
+        if is_fist(lm):
+            return ["fist"]
+    except KeyError:
+        print("drift: incomplete landmarks; skipping frame")
+        return []
+    events: list = []
+    try:
+        if hist is not None and len(hist) >= 2:
+            if palm_velocity(hist) >= cfg.get("swipe_vel_px_s", 900):
+                dx = hist[-1][0] - hist[0][0]
+                events.append("swipe_right" if dx > 0 else "swipe_left")
+    except Exception:
+        pass
+    try:
+        grab_px = cfg.get("pinch_grab_px", 40)
+        release_px = cfg.get("pinch_release_px", 55)
+        if is_pinch(lm, grab_px, release_px, holding):
+            spread = _dist(lm["thumb_tip"], lm["index_tip"])
+            events.append("pinch_in" if spread <= grab_px * 0.6 else "pinch_out")
+    except KeyError:
+        print("drift: incomplete landmarks; skipping frame")
+        return []
+    except Exception:
+        pass
+    return events
