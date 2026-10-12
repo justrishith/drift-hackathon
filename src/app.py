@@ -37,6 +37,35 @@ class ActionFeed:
         return [(now - t, label) for t, label in self.items if now - t < 4.0]
 
 
+@dataclass
+class DemoWindow:
+    """A visible in-HUD target so dry-run still feels like a real product."""
+
+    x: float = 70.0
+    y: float = 170.0
+    w: float = 210.0
+    h: float = 128.0
+    scale: float = 1.0
+    pulse_until: float = 0.0
+
+    def drag_to(self, nx: float, ny: float, frame_w: int, frame_h: int) -> None:
+        target_x = nx * (frame_w - self.w * self.scale - 40) + 20
+        target_y = ny * (frame_h - self.h * self.scale - 120) + 95
+        self.x += (target_x - self.x) * 0.30
+        self.y += (target_y - self.y) * 0.30
+
+    def throw(self, direction: str, frame_w: int) -> None:
+        self.x = 24 if direction == "left" else frame_w - self.w * self.scale - 24
+        self.pulse_until = time.monotonic() + 0.35
+
+    def zoom(self, direction: str) -> None:
+        if direction == "in":
+            self.scale = min(1.45, self.scale + 0.08)
+        else:
+            self.scale = max(0.70, self.scale - 0.08)
+        self.pulse_until = time.monotonic() + 0.28
+
+
 def _display_config(cfg: dict) -> dict:
     """Prefer the real Windows virtual desktop so bare laptops map correctly."""
     try:
@@ -87,10 +116,32 @@ def _state_color(state: str) -> tuple[int, int, int]:
     }.get(state, (255, 255, 255))
 
 
-def _draw_hud(cv2, frame, state: str, fps: float, dry_run: bool, feed: ActionFeed, trail):
+def _draw_demo_window(cv2, frame, state: str, demo: DemoWindow) -> None:
+    now = time.monotonic()
+    color = _state_color(state)
+    x1, y1 = int(demo.x), int(demo.y)
+    x2, y2 = int(demo.x + demo.w * demo.scale), int(demo.y + demo.h * demo.scale)
+    overlay = frame.copy()
+    pulse = 1.0 if now < demo.pulse_until else 0.0
+    glow_pad = int(10 + 18 * pulse)
+    _rounded_rect(cv2, overlay, (x1 - glow_pad, y1 - glow_pad), (x2 + glow_pad, y2 + glow_pad), color, 24, -1)
+    cv2.addWeighted(overlay, 0.12 + 0.10 * pulse, frame, 0.88 - 0.10 * pulse, 0, frame)
+    overlay = frame.copy()
+    _rounded_rect(cv2, overlay, (x1, y1), (x2, y2), (18, 20, 32), 18, -1)
+    cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+    cv2.rectangle(frame, (x1, y1), (x2, y1 + 28), (32, 34, 52), -1)
+    for i, c in enumerate(((80, 90, 255), (80, 220, 255), (120, 255, 150))):
+        cv2.circle(frame, (x1 + 18 + i * 18, y1 + 14), 6, c, -1)
+    cv2.putText(frame, "DRIFT TARGET", (x1 + 18, y1 + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (245, 245, 255), 2)
+    cv2.putText(frame, "grab / throw / zoom", (x1 + 18, y1 + 94), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1)
+
+
+def _draw_hud(cv2, frame, state: str, fps: float, dry_run: bool, feed: ActionFeed, trail, demo: DemoWindow):
     h, w = frame.shape[:2]
     overlay = frame.copy()
     color = _state_color(state)
+
+    _draw_demo_window(cv2, frame, state, demo)
 
     # Apple-style dynamic island: glow + pill + mode text.
     pill_w = 210 if state in ("disabled", "idle") else 360
@@ -110,9 +161,11 @@ def _draw_hud(cv2, frame, state: str, fps: float, dry_run: bool, feed: ActionFee
     cv2.putText(frame, notch_text(state).encode("ascii", "replace").decode("ascii"),
                 (x1 + 55, y1 + 37), cv2.FONT_HERSHEY_DUPLEX, 0.78, (245, 245, 255), 1)
 
-    mode = "DRY-RUN SAFE" if dry_run else "LIVE WINDOWS CONTROL"
+    mode = "DRY-RUN + VISIBLE DEMO WINDOW" if dry_run else "LIVE WINDOWS CONTROL"
     cv2.putText(frame, mode, (18, h - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                 (120, 255, 170) if dry_run else (70, 90, 255), 2)
+    cv2.putText(frame, "L toggles live | Q/Esc quits", (18, h - 52), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                (230, 230, 240), 1)
     cv2.putText(frame, f"FPS {fps:04.1f}", (w - 150, h - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (230, 230, 240), 2)
 
     # Neon trail for wrist/palm movement.
@@ -199,6 +252,9 @@ def run(argv: list[str] | None = None) -> int:
     print(ascii_text("drift: product loop running. Palm activates/grabs, pinch zooms, swipe throws, fist freezes. Q/Esc quits."))
     feed.add("show open palm to activate")
 
+    # Demo window for visible dry-run feedback.
+    demo = DemoWindow()
+
     try:
         while True:
             ok, frame = cap.read()
@@ -239,13 +295,16 @@ def run(argv: list[str] | None = None) -> int:
                         cx, cy = map_to_desktop(lm["nx"], lm["ny"], cfg)
                         active_hwnd = actuator.active_window()
                         actuator.grab(active_hwnd, cx, cy)
+                        demo.drag_to(lm["nx"], lm["ny"], w, h)
                         feed.add("grab window")
                     elif evt in ("swipe_left", "swipe_right"):
                         actuator.throw_to_monitor("left" if evt == "swipe_left" else "right")
+                        demo.throw("left" if evt == "swipe_left" else "right", w)
                         feed.add("throw " + ("left" if evt == "swipe_left" else "right"))
                     elif evt in ("pinch_in", "pinch_out", "pinch"):
                         direction = "out" if evt == "pinch_in" else "in"
                         actuator.zoom(direction)
+                        demo.zoom(direction)
                         feed.add("zoom " + direction)
                     elif evt == "fist" and state == "frozen":
                         actuator.drop()
@@ -256,6 +315,7 @@ def run(argv: list[str] | None = None) -> int:
                     smooth_x = cx if smooth_x is None else ema(smooth_x, cx, 0.30)
                     smooth_y = cy if smooth_y is None else ema(smooth_y, cy, 0.30)
                     actuator.drag_to(int(smooth_x), int(smooth_y))
+                    demo.drag_to(lm["nx"], lm["ny"], w, h)
                     trail.append((int(lm["wrist"][0]), int(lm["wrist"][1])))
                     if now - last_open > cfg.get("linger_drop_s", 0.4):
                         state = next_state(state, "release", now, cfg, timers)
@@ -278,7 +338,7 @@ def run(argv: list[str] | None = None) -> int:
                 frames = 0
                 fps_t0 = now
 
-            _draw_hud(cv2, frame, state, fps, cfg.get("dry_run", True), feed, trail)
+            _draw_hud(cv2, frame, state, fps, cfg.get("dry_run", True), feed, trail, demo)
             try:
                 update_pill(pill, notch_text(state))
             except Exception:
