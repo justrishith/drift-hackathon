@@ -195,6 +195,16 @@ def run(argv: list[str] | None = None) -> int:
             label_txt = (notch_text(state)).encode("ascii", errors="replace").decode("ascii")
             cv2.putText(frame, label_txt, (px + 30, py + 32), cv2.FONT_HERSHEY_DUPLEX, 0.72, (245, 245, 255), 1)
 
+            # Window picker: which focused window Drift controls.
+            picked = ""
+            try:
+                import win32gui
+                picked = win32gui.GetWindowText(win32gui.GetForegroundWindow())
+                if not picked: picked = "(none focused)"
+            except Exception:
+                picked = "(dry-run: no window picked)"
+            cv2.putText(frame, f"DRIFT WINDOW: {picked[:40]}", (14, h - 42), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 210, 50), 2)
+
             # Mode + FPS line.
             frames += 1
             if now - fps_t0 >= 1.0:
