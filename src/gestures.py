@@ -89,3 +89,17 @@ def classify_frame(lm, hist: list, cfg: dict, holding: bool) -> list:
     except Exception:
         pass
     return events
+
+
+def hand_bbox(pts: list) -> tuple:
+    """Pixel bounding box (x, y, w, h) of hand landmark points. Shape mode."""
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
+def eye_aspect(outer, inner, upper, lower) -> float:
+    """Eye aspect ratio; < ~0.21 means blinked. Points are (x, y) tuples."""
+    return _dist(upper, lower) / max(_dist(outer, inner), 1e-6)

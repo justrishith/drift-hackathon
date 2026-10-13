@@ -13,11 +13,12 @@ Keyboard:
 
 Hand gestures (single-hand, webcam 0):
     Open palm show              -> idle_ready (enable / resume)
+    Index finger move           -> cursor (shadow-box to stab/move)
     Open palm push              -> grab focused window
-    Fast swipe left/right       -> throw window to other monitor
-    Pinch spread (thumb-index)  -> zoom out  (Ctrl + -)
-    Pinch close                 -> zoom in   (Ctrl + =)
+    Fast swipe left/right       -> snap window to screen half (split-screen)
+    Pinch hold + move           -> shape window to hand bounding box
     Fist held 0.5s              -> freeze / kill-switch
+    Blink (no hand in frame)    -> latch / let-go grabber (eye fallback)
 """
 from __future__ import annotations
 import argparse
@@ -90,6 +91,18 @@ def run(argv: list[str] | None = None) -> int:
         min_detection_confidence=0.55,
         min_tracking_confidence=0.55,
     )
+    mp_face = mp.solutions.face_mesh
+    face_mesh = mp_face.FaceMesh(
+        static_image_mode=False,
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    blink_cool = 0.0
+    eye_latched = False
+    esx = None
+    esy = None
 
     pill = None
     try:
@@ -112,6 +125,7 @@ def run(argv: list[str] | None = None) -> int:
             hand_lm = result.multi_hand_landmarks[0] if result.multi_hand_landmarks else None
 
             if hand_lm is not None:
+                input_src = "hand"
                 h, w = frame.shape[:2]
                 pts = [(p.x * w, p.y * h) for p in hand_lm.landmark]
                 lm = {
@@ -123,6 +137,8 @@ def run(argv: list[str] | None = None) -> int:
                     "pinky_tip": pts[20], "pinky_pip": pts[18],
                     "nx": hand_lm.landmark[9].x,
                     "ny": hand_lm.landmark[9].y,
+                    "nix": hand_lm.landmark[8].x,
+                    "niy": hand_lm.landmark[8].y,
                 }
                 drawer.draw_landmarks(frame, hand_lm, mp_hands.HAND_CONNECTIONS)
                 last_seen = now
@@ -134,7 +150,7 @@ def run(argv: list[str] | None = None) -> int:
                 if open_palm:
                     last_open = now
 
-                hist.append((float(lm["wrist"][0]), now))
+                hist.append((float(lm["index_tip"][0]), now))
                 hist = [(x, t) for x, t in hist if now - t < 0.50][-24:]
                 holding = state in ("idle_ready", "grab", "pinch")
                 events = gestures.classify_frame(lm, hist, cfg, holding)
@@ -146,7 +162,7 @@ def run(argv: list[str] | None = None) -> int:
                     if evt == "palm_show" and prev == "disabled":
                         _print_ascii("drift: palm activated")
                     if evt == "push_hold" and prev in ("idle_ready", "idle") and state == "grab":
-                        cx, cy = map_to_desktop(lm["nx"], lm["ny"], cfg)
+                        cx, cy = map_to_desktop(lm["nix"], lm["niy"], cfg)
                         active_hwnd = actuator.active_window()
                         actuator.grab(active_hwnd, int(cx), int(cy))
                         demo_x = int(cx)
@@ -160,7 +176,7 @@ def run(argv: list[str] | None = None) -> int:
                         actuator.drop()
 
                 if state == "grab":
-                    cx, cy = map_to_desktop(lm["nx"], lm["ny"], cfg)
+                    cx, cy = map_to_desktop(lm["nix"], lm["niy"], cfg)
                     smooth_x = cx if smooth_x is None else ema(smooth_x, cx, 0.30)
                     smooth_y = cy if smooth_y is None else ema(smooth_y, cy, 0.30)
                     actuator.drag_to(int(smooth_x), int(smooth_y))
@@ -169,10 +185,63 @@ def run(argv: list[str] | None = None) -> int:
                     if now - last_open > cfg.get("linger_drop_s", 0.4):
                         state = next_state(state, "release", now, cfg, timers)
                         actuator.drop()
-                elif state == "pinch" and not any(e in ("pinch_in", "pinch_out", "pinch") for e in events):
-                    state = next_state(state, "release", now, cfg, timers)
+                elif state == "pinch":
+                    # Shape mode: held pinch maps hand bounding box to window size.
+                    fh, fw = frame.shape[:2]
+                    _bx, _by, _bw, _bh = gestures.hand_bbox(pts)
+                    _dw = _bw * (cfg["monitors"]["total_w"] / max(fw, 1))
+                    _dh = _bh * (cfg["monitors"]["total_h"] / max(fh, 1))
+                    actuator.resize_to(_dw, _dh)
+                    if not any(e in ("pinch_in", "pinch_out", "pinch") for e in events):
+                        state = next_state(state, "release", now, cfg, timers)
             else:
-                if state == "grab" and last_seen is not None and now - last_seen > cfg.get("linger_drop_s", 0.4):
+                input_src = "none"
+                # Eye fallback: gaze moves cursor, blink latches / lets go.
+                try:
+                    eres = face_mesh.process(rgb)
+                    flm = eres.multi_face_landmarks[0] if eres.multi_face_landmarks else None
+                except Exception:
+                    flm = None
+                if flm is not None and len(flm.landmark) > 473:
+                    input_src = "eye"
+                    try:
+                        marks = flm.landmark
+                        L = {"o": (marks[33].x, marks[33].y), "i": (marks[133].x, marks[133].y),
+                             "u": (marks[159].x, marks[159].y), "l": (marks[145].x, marks[145].y),
+                             "c": (marks[468].x, marks[468].y)}
+                        R = {"o": (marks[263].x, marks[263].y), "i": (marks[362].x, marks[362].y),
+                             "u": (marks[386].x, marks[386].y), "l": (marks[374].x, marks[374].y),
+                             "c": (marks[473].x, marks[473].y)}
+
+                        def _rel(E):
+                            gx0 = (E["c"][0] - E["o"][0]) / max(E["i"][0] - E["o"][0], 1e-6)
+                            gy0 = (E["c"][1] - E["u"][1]) / max(E["l"][1] - E["u"][1], 1e-6)
+                            return (min(max(gx0, 0.0), 1.0), min(max(gy0, 0.0), 1.0))
+
+                        _lg, _rg = _rel(L), _rel(R)
+                        _gx, _gy = ((_lg[0] + _rg[0]) / 2, (_lg[1] + _rg[1]) / 2)
+                        _ear = (gestures.eye_aspect(L["o"], L["i"], L["u"], L["l"])
+                                + gestures.eye_aspect(R["o"], R["i"], R["u"], R["l"])) / 2
+                        _ex, _ey = map_to_desktop(_gx, _gy, cfg)
+                        esx = _ex if esx is None else ema(esx, _ex, 0.35)
+                        esy = _ey if esy is None else ema(esy, _ey, 0.35)
+                        actuator.move_cursor(int(esx), int(esy))
+                        if _ear < 0.21 and now - blink_cool > 0.6:
+                            blink_cool = now
+                            if actuator._grab:
+                                state = next_state(state, "release", now, cfg, timers)
+                                actuator.drop()
+                                eye_latched = False
+                            else:
+                                actuator.grab(actuator.active_window(), int(esx), int(esy))
+                                state = "grab"
+                                eye_latched = True
+                        elif actuator._grab and eye_latched:
+                            state = "grab"
+                            actuator.drag_to(int(esx), int(esy))
+                    except Exception:
+                        pass
+                if state == "grab" and not eye_latched and last_seen is not None and now - last_seen > cfg.get("linger_drop_s", 0.4):
                     state = next_state(state, "release", now, cfg, timers)
                     actuator.drop()
 
@@ -205,6 +274,14 @@ def run(argv: list[str] | None = None) -> int:
                 picked = "(dry-run: no window picked)"
             cv2.putText(frame, f"DRIFT WINDOW: {picked[:40]}", (14, h - 42), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 210, 50), 2)
 
+            # Continuous Drift-state bridge -> Dynamic Island
+            try:
+                import json, os
+                with open("drift_state.json", "w") as f:
+                    json.dump({"state": state, "window": picked, "mode": "LIVE" if not cfg.get("dry_run", True) else "DRY-RUN", "input": input_src if 'input_src' in locals() else "none"}, f)
+            except Exception:
+                pass
+
             # Mode + FPS line.
             frames += 1
             if now - fps_t0 >= 1.0:
@@ -225,8 +302,8 @@ def run(argv: list[str] | None = None) -> int:
                 update_pill(pill, notch_text(state))
             except Exception:
                 pass
-            cv2.imshow("Drift — AI Hand Control", frame)
-            key = cv2.waitKey(1) & 0xFF
+            # cv2.imshow("Drift — AI Hand Control", frame)  # hidden: Dynamic Island is the only visible UI
+            key = -1  # no OpenCV HUD; Dynamic Island is the only visible UI
             if key in (27, ord("q"), ord("Q")):
                 break
             if key == ord("l") or key == ord("L"):
@@ -240,6 +317,10 @@ def run(argv: list[str] | None = None) -> int:
                 _print_ascii("drift: config reset")
     finally:
         hands.close()
+        try:
+            face_mesh.close()
+        except Exception:
+            pass
         cap.release()
         cv2.destroyAllWindows()
     return 0

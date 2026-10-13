@@ -42,24 +42,38 @@ class Actuator:
     def zoom(self, direction: str) -> None:
         self.log.append(("zoom", direction))
         if self._real():
-            from pynput.keyboard import Controller, Key
-            k = Controller()
-            key = "=" if direction == "in" else "-"
-            with k.pressed(Key.ctrl):
-                k.press(key)
-                k.release(key)
+            import win32gui, win32con
+            hwnd = self.active_window()
+            if hwnd:
+                rect = win32gui.GetWindowRect(hwnd)
+                w, h = rect[2]-rect[0], rect[3]-rect[1]
+                new_w = int(w * 1.15) if direction == "in" else int(w * 0.85)
+                new_h = int(h * 1.15) if direction == "in" else int(h * 0.85)
+                win32gui.SetWindowPos(hwnd, 0, rect[0], rect[1], new_w, new_h, win32con.SWP_NOZORDER)
 
     def drop(self) -> None:
         self.log.append(("drop",))
         self._grab = None
 
+    def resize_to(self, w: int, h: int) -> None:
+        """Resize latched (or active) window to w x h desktop px. Shape mode."""
+        w = max(200, min(int(w), 3840))
+        h = max(150, min(int(h), 2160))
+        self.log.append(("resize", w, h))
+        if self._real():
+            import win32gui, win32con
+            hwnd = self._grab["hwnd"] if self._grab else self.active_window()
+            if hwnd:
+                rect = win32gui.GetWindowRect(hwnd)
+                win32gui.SetWindowPos(hwnd, 0, rect[0], rect[1], w, h, win32con.SWP_NOZORDER)
+
     def throw_to_monitor(self, direction: str) -> None:
+        """Snap active window to screen half (split-screen). Win+Left/Right."""
         self.log.append(("throw", direction))
         if self._real():
             from pynput.keyboard import Key, Controller
             k = Controller()
             key = Key.left if direction == "left" else Key.right
-            with k.pressed(Key.shift_l):
-                with k.pressed(Key.cmd):
-                    k.press(key)
-                    k.release(key)
+            with k.pressed(Key.cmd):
+                k.press(key)
+                k.release(key)
