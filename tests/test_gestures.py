@@ -48,3 +48,35 @@ def test_classify_frame_guards_thresholds_and_zoom():
     lm_mid = _open_palm(pinch=True)
     lm_mid["index_tip"] = (47, 0)
     assert classify_frame(lm_mid, [(0, 0.0), (1, 1.0)], cfg, True) == ["pinch_out"]
+
+
+def test_extension_ratio_open_vs_fist():
+    from src.gestures import extension_ratio
+    assert extension_ratio(_open_palm()) > 1.22
+    assert extension_ratio(_fist_lm()) < 1.10
+
+
+def test_splay_burst_clip2_pattern():
+    # Calibrated from Camera Roll clip WIN_20261012_20_38_01 (wrist->middle_pip
+    # metric): open ~1.30, close 0.61 at t=2.76, burst open 1.29 at t=2.96.
+    from src.gestures import is_splay_burst
+    burst = [(1.30, 0.0), (1.28, 0.1), (0.61, 0.2), (1.29, 0.3)]
+    assert is_splay_burst(burst) is True
+    steady_open = [(1.29, 0.0), (1.30, 0.1), (1.28, 0.2), (1.31, 0.3)]
+    assert is_splay_burst(steady_open) is False
+    slow_open = [(0.90, 0.0), (1.10, 0.5), (1.30, 1.0)]
+    assert is_splay_burst(slow_open) is False
+
+
+def test_hand_bbox_union_two_hands():
+    from src.gestures import hand_bbox
+    left = [(0, 0), (40, 60)]
+    right = [(200, 10), (260, 80)]
+    assert hand_bbox(left + right) == (0, 0, 260, 80)
+
+
+def test_fullscreen_logs_dry_run():
+    from src.actuator import Actuator
+    a = Actuator({"dry_run": True})
+    a.fullscreen()
+    assert a.log == [("fullscreen",)]

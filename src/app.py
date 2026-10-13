@@ -16,7 +16,8 @@ Hand gestures (single-hand, webcam 0):
     Index finger move           -> cursor (shadow-box to stab/move)
     Open palm push              -> grab focused window
     Fast swipe left/right       -> snap window to screen half (split-screen)
-    Pinch hold + move           -> shape window to hand bounding box
+    Pinch hold + move           -> shape window to hand bounding box (two hands = corners)
+    Fingers blow out (splay)    -> fullscreen latched window
     Fist held 0.5s              -> freeze / kill-switch
     Blink (no hand in frame)    -> latch / let-go grabber (eye fallback)
 """
@@ -71,6 +72,7 @@ def run(argv: list[str] | None = None) -> int:
     smooth_x = None
     smooth_y = None
     hist: list[tuple[float, float]] = []
+    ext_hist: list[tuple[float, float]] = []
     last_seen: float | None = None
     last_open = 0.0
     fps = 0.0
@@ -87,7 +89,7 @@ def run(argv: list[str] | None = None) -> int:
     drawer = mp.solutions.drawing_utils
     hands = mp_hands.Hands(
         static_image_mode=False,
-        max_num_hands=1,
+        max_num_hands=2,
         min_detection_confidence=0.55,
         min_tracking_confidence=0.55,
     )
@@ -100,6 +102,7 @@ def run(argv: list[str] | None = None) -> int:
         min_tracking_confidence=0.5,
     )
     blink_cool = 0.0
+    splay_cool = 0.0
     eye_latched = False
     esx = None
     esy = None
@@ -122,12 +125,16 @@ def run(argv: list[str] | None = None) -> int:
             now = time.monotonic()
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = hands.process(rgb)
-            hand_lm = result.multi_hand_landmarks[0] if result.multi_hand_landmarks else None
+            hand_lms = result.multi_hand_landmarks or []
+            hand_lm = hand_lms[0] if hand_lms else None
 
             if hand_lm is not None:
                 input_src = "hand"
                 h, w = frame.shape[:2]
                 pts = [(p.x * w, p.y * h) for p in hand_lm.landmark]
+                shape_pts = list(pts)
+                for _hlm in hand_lms[1:]:
+                    shape_pts += [(p.x * w, p.y * h) for p in _hlm.landmark]
                 lm = {
                     "wrist": pts[0],
                     "thumb_tip": pts[4],
@@ -152,6 +159,18 @@ def run(argv: list[str] | None = None) -> int:
 
                 hist.append((float(lm["index_tip"][0]), now))
                 hist = [(x, t) for x, t in hist if now - t < 0.50][-24:]
+                try:
+                    ext_hist.append((gestures.extension_ratio(lm), now))
+                except Exception:
+                    pass
+                ext_hist = [(v, t) for v, t in ext_hist if now - t < 0.60][-32:]
+                if gestures.is_splay_burst(ext_hist) and now - splay_cool > 1.0:
+                    splay_cool = now
+                    ext_hist = []
+                    actuator.fullscreen()
+                    actuator.drop()
+                    if state != "frozen":
+                        state = "idle_ready"
                 holding = state in ("idle_ready", "grab", "pinch")
                 events = gestures.classify_frame(lm, hist, cfg, holding)
                 for evt in events:
@@ -186,9 +205,9 @@ def run(argv: list[str] | None = None) -> int:
                         state = next_state(state, "release", now, cfg, timers)
                         actuator.drop()
                 elif state == "pinch":
-                    # Shape mode: held pinch maps hand bounding box to window size.
+                    # Shape mode: held pinch maps union hand bounding box to window size.
                     fh, fw = frame.shape[:2]
-                    _bx, _by, _bw, _bh = gestures.hand_bbox(pts)
+                    _bx, _by, _bw, _bh = gestures.hand_bbox(shape_pts)
                     _dw = _bw * (cfg["monitors"]["total_w"] / max(fw, 1))
                     _dh = _bh * (cfg["monitors"]["total_h"] / max(fh, 1))
                     actuator.resize_to(_dw, _dh)

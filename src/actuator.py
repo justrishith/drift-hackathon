@@ -55,6 +55,15 @@ class Actuator:
         self.log.append(("drop",))
         self._grab = None
 
+    def fullscreen(self) -> None:
+        """Maximize latched (or active) window. Splay-burst ('blow out') action."""
+        self.log.append(("fullscreen",))
+        if self._real():
+            import win32gui
+            hwnd = self._grab["hwnd"] if self._grab else self.active_window()
+            if hwnd:
+                win32gui.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+
     def resize_to(self, w: int, h: int) -> None:
         """Resize latched (or active) window to w x h desktop px. Shape mode."""
         w = max(200, min(int(w), 3840))

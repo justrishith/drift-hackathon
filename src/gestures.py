@@ -103,3 +103,22 @@ def hand_bbox(pts: list) -> tuple:
 def eye_aspect(outer, inner, upper, lower) -> float:
     """Eye aspect ratio; < ~0.21 means blinked. Points are (x, y) tuples."""
     return _dist(upper, lower) / max(_dist(outer, inner), 1e-6)
+
+
+def extension_ratio(lm: dict) -> float:
+    """Mean fingertip spread relative to palm size. ~1.3 open, ~0.6 closed."""
+    w = lm["wrist"]
+    palm = _dist(w, lm["middle_pip"])
+    tips = [_dist(w, lm[t]) for t in ("index_tip", "middle_tip", "ring_tip", "pinky_tip")]
+    return sum(tips) / len(tips) / max(palm, 1e-6)
+
+
+def is_splay_burst(ext_hist: list, low: float = 1.10, high: float = 1.22, window_s: float = 0.35) -> bool:
+    """True when fingers blow open (closed -> splayed) inside window_s. Fullscreen signal."""
+    if len(ext_hist) < 2:
+        return False
+    now = ext_hist[-1][1]
+    recent = [(v, t) for v, t in ext_hist if now - t <= window_s]
+    if len(recent) < 2:
+        return False
+    return min(v for v, _ in recent) < low and recent[-1][0] > high
